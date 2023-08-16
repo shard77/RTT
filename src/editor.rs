@@ -82,8 +82,6 @@ impl Editor {
         Ok(())
     }
 
-
-
     fn draw_welcome_message(&self) {
         let mut welcome_message = format!("RTT - Version: {}", VERSION);
         let width = self.terminal.size().width as usize;
@@ -156,30 +154,28 @@ impl Editor {
         let start = self.offset.x;
         let end = self.offset.x + width;
         let row = row.render(start, end);
-        println!("{}\r", row);
+        println!("{}\r", row)
     }
 
     fn draw_rows(&self) {
         let height = self.terminal.size().height;
-        for terminal_row in 0..height {
+        for terminal_row in 0..height - 1 {
+            Terminal::clear_current_line().unwrap_or_default();
             if let Some(row) = self.document.row(terminal_row as usize + self.offset.y) {
                 self.draw_row(row);
             } else if self.document.is_empty() && terminal_row == height / 3 {
                 self.draw_welcome_message();
-            } else if terminal_row == self.terminal.size().height - 1{
-                print!("~\r");
             } else {
                 println!("~\r");
             }
         }
     }
-
     
 }
 
 fn die(e: std::io::Error) {
     Terminal::clear_screen().unwrap_or_else(|_| {
-        println!("Failed to clear the terminal");
+        eprintln!("Failed to clear the terminal");
     });
 
     panic!("{}", e);
