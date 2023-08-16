@@ -177,7 +177,6 @@ impl Editor {
     
 }
 
-
 fn die(e: std::io::Error) {
     Terminal::clear_screen().unwrap_or_else(|_| {
         println!("Failed to clear the terminal");
