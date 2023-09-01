@@ -8,6 +8,7 @@ use crossterm::style::Color;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const QUIT_TIMES: u8 = 3;
 
 #[derive(Default)]
 pub struct Position {
@@ -36,6 +37,7 @@ pub struct Editor {
     offset: Position,
     document: Document,
     status_message: StatusMessage,
+    quit_times: u8,
 }
 
 impl Editor {
@@ -55,7 +57,7 @@ impl Editor {
 
     pub fn default() -> Self {
         let args: Vec<String> = env::args().collect();
-        let mut initial_status = String::from("Help: Ctrl-Q = quit");
+        let mut initial_status = String::from("Help: Ctrl-S = save | Ctrl-Q = quit");
         let document = if args.len() > 1 {
             let file_name = &args[1];
             let doc = Document::open(&file_name);
@@ -75,6 +77,7 @@ impl Editor {
             cursor_position: Position::default(),
             offset: Position::default(),
             status_message: StatusMessage::from(initial_status),
+            quit_times: QUIT_TIMES
         }
     }
 
@@ -97,17 +100,95 @@ impl Editor {
         Ok(())
     }
 
+    fn save(&mut self) {
+        if self.document.file_name.is_none() {
+            let new_name = self.prompt("Save as: ").unwrap_or(None);
+            if new_name.is_none() {
+                self.status_message = StatusMessage::from("Save aborted.".to_string());
+                return;
+            }
+            self.document.file_name = new_name;
+        }
+
+        if self.document.save().is_ok() {
+            self.status_message = StatusMessage::from("File saved successfully.".to_string());
+        } else {
+            self.status_message = StatusMessage::from("Error writing file!".to_string());
+        }
+    }
+
     fn process_keypress(&mut self) -> Result<(), std::io::Error> {
         let KeyEvent { code, modifiers, .. } = Terminal::read_key()?;
     
         match (code, modifiers) {
-            (KeyCode::Char('q'), KeyModifiers::CONTROL) => self.should_quit = true,
+            (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
+                if self.quit_times > 0 && self.document.is_dirty() {
+                    self.status_message = StatusMessage::from(format!(
+                        "WARNING! File has unsaved changes. Press Ctrl-Q {} more times to quit.",
+                        self.quit_times
+                    ));
+                    self.quit_times -= 1;
+                    return Ok(());
+                }
+                self.should_quit = true
+            },
+            (KeyCode::Char('s'), KeyModifiers::CONTROL) => self.save(),
+            (KeyCode::Char(c), KeyModifiers::NONE) => {
+                self.document.insert(&self.cursor_position, c);
+                self.move_cursor(KeyCode::Right);
+            },
+            (KeyCode::Delete, KeyModifiers::NONE) => self.document.delete(&self.cursor_position),
+            (KeyCode::Backspace, KeyModifiers::NONE) => {
+                if self.cursor_position.x > 0 || self.cursor_position.y > 0 {
+                    self.move_cursor(KeyCode::Left);
+                    self.document.delete(&self.cursor_position);
+                }
+            },
             (KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right, KeyModifiers::NONE) => self.move_cursor(code),
             _ => {}
         }
         self.scroll();
+        if self.quit_times < QUIT_TIMES {
+            self.quit_times = QUIT_TIMES;
+            self.status_message = StatusMessage::from(String::new());
+        }
         Ok(())
     }
+
+
+    fn prompt(&mut self, prompt: &str) -> Result<Option<String>, std::io::Error> {
+        let mut result = String::new();
+        loop {
+            self.status_message = StatusMessage::from(format!("{}{}", prompt, result));
+            self.refresh_screen()?;
+            
+            match Terminal::read_key() {
+                Ok(KeyEvent{ code: KeyCode::Backspace, modifiers: KeyModifiers::NONE, .. }) => {
+                    if !result.is_empty() {
+                        result.truncate(result.len() - 1);
+                    }
+                },
+                Ok(KeyEvent{ code: KeyCode::Char('\n'), modifiers: KeyModifiers::NONE, .. }) => break,
+                Ok(KeyEvent{ code: KeyCode::Char(c), modifiers: KeyModifiers::NONE, .. }) => {
+                    if !c.is_control() {
+                        result.push(c);
+                    }
+                },
+                Ok(KeyEvent{ code: KeyCode::Esc, modifiers: KeyModifiers::NONE, .. }) => {
+                    result.truncate(0);
+                    break;
+                },
+                _ => (),
+            }            
+        }
+        self.status_message = StatusMessage::from(String::new());
+        if result.is_empty() {
+            return Ok(None);
+        }
+        
+        Ok(Some(result))
+    }
+    
 
     fn draw_welcome_message(&self) {
         let mut welcome_message = format!("RTT - Version: {}", VERSION);
@@ -228,6 +309,11 @@ impl Editor {
     fn draw_status_bar(&self) {
         let mut status;
         let width = self.terminal.size().width as usize;
+        let modified_indicator = if self.document.is_dirty() {
+            " (modified)"
+        } else {
+            ""
+        };
         let mut file_name = "[No Name]".to_string();
         if let Some(name) = &self.document.file_name {
             file_name = name.clone();
@@ -244,7 +330,26 @@ impl Editor {
         if width > len {
             status.push_str(&" ".repeat(width - len));
         }
+
+        status = format!(
+            "{} - {} lines{}",
+            file_name,
+            self.document.len(),
+            modified_indicator
+        );
+
+        let line_indicator = format!(
+            "{}/{}",
+            self.cursor_position.y.saturating_add(1),
+            self.document.len()
+        );
+        let len = status.len() + line_indicator.len();
+        if width > len {
+            status.push_str(&" ".repeat(width - len));
+        }
         status = format!("{}{}", status, line_indicator);
+        status.truncate(width);
+
         Terminal::set_background_color(Color::DarkBlue).unwrap_or_default();
         Terminal::set_foreground_color(Color::White).unwrap_or_default();
         println!("{}\r", status);
